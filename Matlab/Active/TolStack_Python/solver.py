@@ -148,8 +148,18 @@ def fetchstack(s: StackRange) -> StackRange:
         s.Result = None
 
     s.Plot = 0 if parsed["PLOT"] is None else int(np.ravel(parsed["PLOT"])[0])
-    s.Name = parsed["NAME"] if parsed["NAME"] is not None else ""
-    s.input_distribution = parsed["DISTRIBUTION"] if parsed["DISTRIBUTION"] is not None else ""
+
+    # Text tags: coerce to plain strings so a numeric cell can't later trigger
+    # an "ambiguous truth value" error on an ndarray.
+    def _as_text(v):
+        if v is None:
+            return ""
+        if isinstance(v, np.ndarray):
+            return str(np.ravel(v)[0]) if v.size else ""
+        return str(v)
+
+    s.Name = _as_text(parsed["NAME"])
+    s.input_distribution = _as_text(parsed["DISTRIBUTION"])
 
     return s
 
@@ -200,6 +210,37 @@ def check_inputs(s: StackRange) -> StackRange:
         messages.append("Error: Different Number of C and Cv Rows")
         s.invalid_stack = 1
 
+    # ---- Robustness guards (open-source hardening) ---------------------------
+    # 1) Reject non-numeric / blank cells that parsed to NaN. Without this a
+    #    single bad cell silently poisons the whole Monte-Carlo with NaN.
+    for _name, _arr in (("R", s.R), ("Re", s.Re), ("C", s.C), ("Cv", s.Cv)):
+        if _arr is not None and np.size(_arr) > 0:
+            if not np.all(np.isfinite(np.asarray(_arr, dtype=float))):
+                messages.append(
+                    f"Error: {_name} contains blank or non-numeric cells (NaN). "
+                    f"Fill every value in the {_name} block."
+                )
+                s.invalid_stack = 1
+
+    # 2) Sample count must allow a sample standard deviation (needs >= 2).
+    if s.N is not None and s.N < 2:
+        messages.append("Error: N_SAMPLES must be >= 2 (need >=2 for a std dev).")
+        s.invalid_stack = 1
+
+    # 3) Sigma multiplier must be positive (used as a divisor).
+    if s.Nsig is not None and s.Nsig <= 0:
+        messages.append("Error: N_SIGMA must be greater than 0.")
+        s.invalid_stack = 1
+
+    # 4) Distribution must be recognized (Normal / Uniform).
+    _dist = str(s.input_distribution).strip().upper()[:1] if s.input_distribution else "N"
+    if _dist not in ("N", "U"):
+        messages.append(
+            f"Optional Input Note: unrecognized DISTRIBUTION "
+            f"'{s.input_distribution}', using Normal."
+        )
+        s.input_distribution = "Normal"
+
     s.messages = messages  # type: ignore[attr-defined]
     return s
 
@@ -214,6 +255,38 @@ def nrd(mu: np.ndarray, sigma: np.ndarray) -> np.ndarray:
         return np.random.randn(*mu.shape) * float(sigma) + mu
     # Size mismatch: MATLAB returns zeros in this case.
     return np.zeros(mu.shape)
+
+
+def draw_error(limits: np.ndarray, nsig: float, distribution: str = "Normal") -> np.ndarray:
+    """Draw one random error sample per element from the chosen distribution.
+
+    Parameters
+    ----------
+    limits : array
+        The ``Re`` block, i.e. the *N-sigma* error value for each DOF (the value
+        entered in the sheet). This is the tolerance limit at ``nsig`` sigma.
+    nsig : float
+        The sigma multiplier ``N_SIGMA``.
+    distribution : str
+        ``"Normal"``/``"N"`` (default) or ``"Uniform"``/``"U"``.
+
+    Conventions
+    -----------
+    * **Normal:** sigma = limits / nsig, sample ``N(0, sigma)``. This is
+      bit-for-bit the same distribution the tool used before (``nrd(0, Re/nsig)``),
+      so existing Normal workbooks are unchanged.
+    * **Uniform:** sample ``U(-limits, +limits)`` -- the error is equally likely
+      anywhere inside the full tolerance band, the standard worst-case uniform
+      assumption in tolerance analysis.
+    """
+    limits = np.asarray(limits, dtype=float)
+    d = str(distribution).strip().upper()[:1] if distribution else "N"
+    if d == "U":
+        # Uniform over the full +/- tolerance band.
+        return (np.random.rand(*limits.shape) * 2.0 - 1.0) * limits
+    # Default: Normal with sigma = limits / nsig.
+    sigma = limits / float(nsig)
+    return np.random.randn(*limits.shape) * sigma
 
 
 def err_correct2(Tre, Tae, Tn, C, Cv):
@@ -267,7 +340,7 @@ def solve_error_comp(Rn, Re, C, Vc):
         # Relative error transform.
         Tre = np.linalg.solve(Tn, Tae)
 
-        if not np.all(C):  # a zero anywhere in C -> compensation branch
+        if np.any(C != 0):  # any corrector present -> compensation branch
             Trec = err_correct2(Tre, Tae, Tn, C, Vc)
             Ec = extract_HTM_error(Trec)  # (loop over C rows collapses to last)
             Tc = CoordTform(Ec, "o")
@@ -309,18 +382,18 @@ def tol_stack_solve(s: Optional[StackRange] = None, log=None):
         emit("INVALID INPUTS")
         return None
 
-    # 1-sigma error from N-sigma input.
-    Re_ns = np.asarray(s.Re, dtype=float) / s.Nsig
+    # N-sigma error limits (as entered in the sheet).
+    Re_limits = np.asarray(s.Re, dtype=float)
 
-    # Monte-Carlo.
+    # Monte-Carlo. Each sample draws the error terms from the selected
+    # distribution (Normal or Uniform); see draw_error() for conventions.
     emit(f"Solving '{s.Name}': N={s.N} samples, {s.input_distribution} distribution...")
     error = np.zeros((s.N, 6))
     Tn_list = None
     Tc_list = None
-    zeros_mu = np.zeros_like(Re_ns)
     for i in range(s.N):
         e, _, _, _, _, Tn_list, Tc_list = solve_error_comp(
-            s.R, nrd(zeros_mu, Re_ns), s.C, s.Cv
+            s.R, draw_error(Re_limits, s.Nsig, s.input_distribution), s.C, s.Cv
         )
         error[i, :] = e
 

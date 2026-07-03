@@ -42,8 +42,9 @@ else
 end
 %% PREPARE DATA
 
-% Solve 1-SIGMA from N-sigma input.
-Re_ns =   S.Re./S.Nsig; 
+% N-sigma error limits (as entered in the sheet). Sampling per-iteration is
+% handled by draw_error() using the selected DISTRIBUTION (Normal or Uniform).
+Re_limits = S.Re;
 %% SOLVE SYSTEM
 
 % * Input Verification Prints *
@@ -60,7 +61,7 @@ Re_ns =   S.Re./S.Nsig;
 % Perform Montecarlo simulation.
 for i = 1:S.N
     % Relative Error and Transform Paths are output
-    [S.Error(i,:), ~, ~, ~, ~, S.Tn_list, S.Tc_list] = solve_error_comp(S.R, nrd(zeros(size(Re_ns)), Re_ns), S.C, S.Cv);
+    [S.Error(i,:), ~, ~, ~, ~, S.Tn_list, S.Tc_list] = solve_error_comp(S.R, draw_error(Re_limits, S.Nsig, S.input_distribution), S.C, S.Cv);
 
     % Progress Bar
     % if (mod(i,S.N/100)==0)

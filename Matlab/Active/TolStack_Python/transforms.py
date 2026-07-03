@@ -92,7 +92,23 @@ def CoordTform(P, order: str = "o") -> np.ndarray:
 def extract_HTM_error(H: np.ndarray) -> np.ndarray:
     """Recover [dx, dy, dz, eps_x, eps_y, eps_z] from a 4x4 HTM.
 
-    Mirrors MATLAB extract_HTM_error.m (0-indexed here).
+    This is the exact inverse of the 3-2-1 (Z*Y*X) rotation built by
+    ``CoordTform(..., "o")``: for R = Rz*Ry*Rx the three angles are recovered
+    exactly (up to the usual +/-90 deg pitch singularity).
+
+    NOTE (fidelity): the original MATLAB `extract_HTM_error.m` used
+    ``eps_z = atan2(H[1,0], H[1,1])``, which is only a first-order (small-angle)
+    approximation of the Z rotation and couples in the X/Y angles. It is
+    replaced here by the exact ``atan2(H[1,0], H[0,0])``. The two agree to well
+    under 0.005% for angular errors below ~0.01 rad, but the old form drifts
+    quickly for larger angles (~15% at 0.5 rad). Since this function is applied
+    to *relative error* transforms (small rotations) the practical difference is
+    tiny, but the exact form is strictly more correct and round-trips perfectly.
+    The MATLAB source should be updated to match for parity.
+
+    For an even more robust, decomposition-order-independent measure of a small
+    rotational error, see ``rotation_vector_error`` below (log-map / exponential
+    coordinates), which has no gimbal-lock singularity.
     """
     H = np.asarray(H, dtype=float)
     del_x = H[0, 3]
@@ -100,8 +116,36 @@ def extract_HTM_error(H: np.ndarray) -> np.ndarray:
     del_z = H[2, 3]
     eps_x = np.arctan2(H[2, 1], H[2, 2])
     eps_y = np.arctan2(-H[2, 0], np.sqrt(H[2, 2] ** 2 + H[2, 1] ** 2))
-    eps_z = np.arctan2(H[1, 0], H[1, 1])
+    eps_z = np.arctan2(H[1, 0], H[0, 0])  # exact ZYX (was H[1,1] in MATLAB)
     return np.array([del_x, del_y, del_z, eps_x, eps_y, eps_z])
+
+
+def rotation_vector_error(H: np.ndarray) -> np.ndarray:
+    """Recover [dx, dy, dz, rx, ry, rz] where (rx, ry, rz) is the rotation
+    vector (axis * angle) of the rotation part of ``H`` -- the SO(3) log map.
+
+    Unlike the Euler extraction in ``extract_HTM_error`` this representation is
+    independent of any rotation order and has no gimbal-lock singularity, which
+    makes it the most robust angular-error measure for small rotations. It is
+    provided as an optional, more-accurate alternative; the solver uses the
+    Euler form by default to preserve the tool's established convention.
+    """
+    H = np.asarray(H, dtype=float)
+    R = H[0:3, 0:3]
+    # Clamp for numerical safety before arccos.
+    cos_theta = np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)
+    theta = np.arccos(cos_theta)
+    if theta < 1e-12:
+        # Near-identity: first-order skew part (avoids 0/0).
+        rx = 0.5 * (R[2, 1] - R[1, 2])
+        ry = 0.5 * (R[0, 2] - R[2, 0])
+        rz = 0.5 * (R[1, 0] - R[0, 1])
+    else:
+        s = 2.0 * np.sin(theta)
+        rx = theta * (R[2, 1] - R[1, 2]) / s
+        ry = theta * (R[0, 2] - R[2, 0]) / s
+        rz = theta * (R[1, 0] - R[0, 1]) / s
+    return np.array([H[0, 3], H[1, 3], H[2, 3], rx, ry, rz])
 
 
 def data_transform(data: np.ndarray, T: np.ndarray) -> np.ndarray:

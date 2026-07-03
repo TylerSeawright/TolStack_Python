@@ -66,12 +66,20 @@ python app.py
 
 - Rotation order is preserved: 3-2-1 (`Rz*Ry*Rx*Translate` for `"o"`,
   `Translate*Rz*Ry*Rx` for `"p"`).
-- `extract_HTM_error` uses the **exact same formula** as the MATLAB original
-  (a small-angle approximation for the Z rotation), so results match the
-  MATLAB tool rather than a "corrected" decomposition.
+- `extract_HTM_error` recovers the ZYX angles **exactly** (`eps_z =
+  atan2(H[1,0], H[0,0])`). The original MATLAB used a small-angle approximation
+  for the Z rotation; the exact form is used here and the `.m` source should be
+  updated to match. `transforms.rotation_vector_error` offers an optional
+  order-independent (log-map) angular measure with no gimbal-lock singularity.
 - Sample standard deviation uses `ddof=1`, matching MATLAB's default `std`.
-- The compensation branch triggers on the same condition as MATLAB
-  (`~all(C)`), and an all-zero compensator leaves the error unchanged.
+- Compensation is applied when any corrector is present (`np.any(C != 0)`); an
+  all-zero compensator leaves the error unchanged.
+- **Input distribution** is honored via the `DISTRIBUTION` tag: `N`/`Normal`
+  samples `N(0, Re/N_SIGMA)`; `U`/`Uniform` samples uniformly across the full
+  `±Re` tolerance band. Unrecognized values fall back to Normal.
+- Inputs are validated: blank/non-numeric cells in `R/Re/C/Cv`, `N_SAMPLES < 2`,
+  or `N_SIGMA <= 0` are reported as errors instead of silently producing `NaN`.
+- See `MATH_VERIFICATION.md` for the full numerical-verification report.
 
 ## Building a standalone .exe (no Python needed by end users)
 

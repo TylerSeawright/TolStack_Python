@@ -26,8 +26,10 @@ function [Ec, Tn, Tae, Tre, Tc, Tn_list, Tc_list] = solve_error_comp(Rn, Re, C, 
         % Calculate Relative Error Transform
         Tre = Tn\Tae;
 
-        % Bypass if C is not provided
-        if ~all(C)
+        % Compensate only if a corrector is actually present. (Was ~all(C),
+        % which skipped a fully-populated corrector and behaved differently
+        % from the Python port; any(C(:)) = "any nonzero corrector".)
+        if any(C(:))
             % Compensate
             Trec = err_correct2(Tre, Tae, Tn, C, Vc);
             % Extract Error Vector
