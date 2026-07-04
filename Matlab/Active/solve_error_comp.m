@@ -1,9 +1,13 @@
-function [Ec, Tn, Tae, Tre, Tc, Tn_list, Tc_list] = solve_error_comp(Rn, Re, C, Vc)
+function [Ec, Tn, Tae, Tre, Tc, Tn_list, Tc_list] = solve_error_comp(Rn, Re, C, Vc, Ce)
     % Description:
     % Solve the relative error of a vector path between nominal and
-    % propagated error position using HTM. 
+    % propagated error position using HTM.
     % Compensator must be applied
-    % between the first and last points in the vector path. 
+    % between the first and last points in the vector path.
+    % Ce (optional) is a zero-mean corrector error sample (same size as C).
+    if nargin < 5 || isempty(Ce)
+        Ce = zeros(size(C));
+    end
  
     % Revised 7/30/25 by Tyler S. Added Tn_list and modified loop to output
     % list of all transforms for access later.
@@ -31,7 +35,7 @@ function [Ec, Tn, Tae, Tre, Tc, Tn_list, Tc_list] = solve_error_comp(Rn, Re, C, 
         % from the Python port; any(C(:)) = "any nonzero corrector".)
         if any(C(:))
             % Compensate
-            Trec = err_correct2(Tre, Tae, Tn, C, Vc);
+            Trec = err_correct2(Tre, Tae, Tn, C, Vc, Ce);
             % Extract Error Vector
             rowC = size(C,1);
             for i = 1:rowC

@@ -16,6 +16,10 @@ function [s] = check_inputs(s)
         fprintf("Optional Input Missing: Cv Will Not Be Used\n");
         s.Cv = zeros(1,6);
     end
+    if isempty(s.Ce)
+        % Perfect corrector default (no repeatability error).
+        s.Ce = zeros(size(s.C));
+    end
     if isempty(s.N)
         fprintf("Optional Input Missing: N = 1000 Default Will Be Used\n");
         s.N = 1000;
@@ -55,10 +59,16 @@ function [s] = check_inputs(s)
         s.invalid_stack = 1;
     end
 
+    % Ce must have the same number of rows as C.
+    if ~isempty(s.C) && ~isempty(s.Ce) && size(s.Ce,1) ~= size(s.C,1)
+        fprintf("Error: Ce must have the same number of rows as C\n")
+        s.invalid_stack = 1;
+    end
+
     % ---- Robustness guards (open-source hardening; mirror solver.py) --------
     % 1) Reject blank/non-numeric cells that parsed to NaN. Without this a single
     %    bad cell silently poisons the whole Monte-Carlo with NaN.
-    blocks = {'R', s.R; 'Re', s.Re; 'C', s.C; 'Cv', s.Cv};
+    blocks = {'R', s.R; 'Re', s.Re; 'C', s.C; 'Cv', s.Cv; 'Ce', s.Ce};
     for k = 1:size(blocks,1)
         arr = blocks{k,2};
         if ~isempty(arr) && any(~isfinite(arr(:)))

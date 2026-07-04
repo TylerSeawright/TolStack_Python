@@ -75,8 +75,17 @@ class TolStackApp:
         self.root = root
         root.title("TolStack")
         root.configure(bg=BG_COLOR)
-        root.geometry("360x360")
+        root.geometry("360x440")
         root.resizable(False, False)
+
+        # Floating always-on-top panel (ACS-style), so it stays visible over
+        # Excel while you work. Toggle with the "Pin on top" check box.
+        self.pin_var = tk.BooleanVar(value=True)
+        root.attributes("-topmost", True)
+        try:
+            root.lift()
+        except Exception:
+            pass
 
         if ICON_ICO:
             try:
@@ -144,6 +153,21 @@ class TolStackApp:
                                    font=("Segoe UI", 14, "bold"), height=1)
         self.solve_btn.pack(fill="x")
 
+        self.export_btn = tk.Button(btns, text="Export Data", command=self.on_export,
+                                    bg="#FFD966", activebackground="#FFD966",
+                                    font=("Segoe UI", 12, "bold"), height=1)
+        self.export_btn.pack(fill="x", pady=(6, 0))
+
+        self.template_btn = tk.Button(btns, text="New Template", command=self.on_new_template,
+                                      bg="#B4C7E7", activebackground="#B4C7E7",
+                                      font=("Segoe UI", 12, "bold"), height=1)
+        self.template_btn.pack(fill="x", pady=(6, 0))
+
+        self.pin_chk = tk.Checkbutton(btns, text="Pin on top", variable=self.pin_var,
+                                      command=self._toggle_pin, bg=BG_COLOR,
+                                      activebackground=BG_COLOR, font=("Segoe UI", 9))
+        self.pin_chk.pack(anchor="e", pady=(2, 0))
+
         self.log = scrolledtext.ScrolledText(root, height=6, font=("Consolas", 9),
                                              state="disabled", wrap="word")
         self.log.pack(fill="both", expand=True, padx=12, pady=(8, 12))
@@ -157,49 +181,76 @@ class TolStackApp:
         self.root.update_idletasks()
 
     def on_solve(self):
-        """Solve button: run the full Monte-Carlo, plot, and write results."""
+        """Solve: delegate to the shared headless backend (writes all outputs and
+        embeds plots into the same sheet as the selection)."""
+        self._run_backend("solve")
+
+    def on_check_path(self):
+        """Check Path: embed the nominal coordinate path plot into the sheet."""
+        self._run_backend("checkpath")
+
+    def on_new_template(self):
+        """Insert a fresh TolStack template as a new tab in the active workbook."""
         try:
+            import excel_io
             self._log("-" * 40)
-            s = tol_stack_solve(StackRange(), log=self._log)
-            if s is None:
-                messagebox.showerror("TolStack", "INVALID INPUTS")
-                return
-
-            if s.Plot:
-                plotting.plot_histogram(s.Error, s.mu, s.Nsig * s.sigma, s.Name)
-                plotting.plot_coord2(COORD(), s.Tn_list, s.Name)
-                plt.show(block=False)
-
-            if s.Result is not None:
-                from excel_io import write_results
-                write_results(s.Result, s.uplusNsigma)
-                self._log("Results written to Excel at "
-                          f"row {s.Result[0]}, cols {s.Result[1] + 1}-{s.Result[1] + 6}.")
-
-            self._log("mu+N*sigma = [" +
-                      ", ".join(f"{v:.4e}" for v in s.uplusNsigma) + "]")
+            self._log("Adding a template tab to the active workbook...")
+            name = excel_io.insert_template_tab()
+            self._log(f"Template added as new tab '{name}'. Fill it in and click Solve.")
         except Exception as exc:
             self._log(f"ERROR: {exc}")
             traceback.print_exc()
             messagebox.showerror("TolStack", str(exc))
 
-    def on_check_path(self):
-        """Check Path button: plot the nominal coordinate path from Excel."""
+    def _toggle_pin(self):
+        """Toggle the always-on-top (floating) behavior."""
+        try:
+            self.root.attributes("-topmost", bool(self.pin_var.get()))
+        except Exception:
+            pass
+
+    def on_export(self):
+        """Export the raw Monte-Carlo histogram samples to .csv or .xlsx."""
+        try:
+            from tkinter import filedialog
+            import tolstack_cli
+            from solver import run_solve
+            self._log("-" * 40)
+            self._log("Reading selection and running Monte-Carlo for export...")
+            s, _sess = tolstack_cli._solve_live_stackrange()
+            s = run_solve(s, log=self._log)
+            if s is None:
+                messagebox.showerror("TolStack", "INVALID INPUTS")
+                return
+            path = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV file", "*.csv"), ("Excel workbook", "*.xlsx")],
+                initialfile=f"{s.Name or 'TolStack'}_histogram",
+                title="Export histogram data")
+            if not path:
+                self._log("Export cancelled.")
+                return
+            tolstack_cli.export_histogram(s, path)
+            self._log(f"Exported {s.N} samples ({len(s.Error)} rows) to {path}")
+            messagebox.showinfo("TolStack", f"Exported {s.N} samples to:\n{path}")
+        except Exception as exc:
+            self._log(f"ERROR: {exc}")
+            traceback.print_exc()
+            messagebox.showerror("TolStack", str(exc))
+
+    def _run_backend(self, mode):
+        """Run tolstack_cli against the live Excel selection. This is the exact
+        same code path the on-sheet Excel buttons use, so the mini-window and the
+        in-Excel buttons behave identically."""
         try:
             self._log("-" * 40)
-            self._log("Checking path from active Excel selection...")
-            s = fetchstack(StackRange())
-            if s.R is None:
-                messagebox.showerror("TolStack", "No R vectors found in selection.")
-                return
-            import numpy as np
-            C = s.C if s.C is not None else np.zeros((1, 6))
-            Cv = s.Cv if s.Cv is not None else np.zeros((1, 6))
-            _, _, _, _, _, Tn_list, _ = solve_error_comp(
-                s.R, np.zeros_like(np.atleast_2d(s.R)), C, Cv)
-            plotting.plot_coord2(COORD(), Tn_list, s.Name or "Nominal Path")
-            plt.show(block=False)
-            self._log(f"Path plotted: {len(Tn_list)} coordinate frames.")
+            self._log(f"Running '{mode}' on the active Excel selection...")
+            import tolstack_cli
+            rc = tolstack_cli.run_live(mode)
+            if rc == 0:
+                self._log("Done. Results and plots updated in Excel.")
+            else:
+                self._log("Finished with issues — see the pop-up message.")
         except Exception as exc:
             self._log(f"ERROR: {exc}")
             traceback.print_exc()
@@ -214,3 +265,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+# TolStack GUI: Check Path / Solve / Export Data buttons delegate to tolstack_cli.

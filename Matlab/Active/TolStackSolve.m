@@ -45,6 +45,19 @@ end
 % N-sigma error limits (as entered in the sheet). Sampling per-iteration is
 % handled by draw_error() using the selected DISTRIBUTION (Normal or Uniform).
 Re_limits = S.Re;
+
+% Optional reproducible RNG seed. A blank cell parses to the string "NaN";
+% only seed when a real number was supplied (else the run is random each time).
+if ~isempty(S.Seed) && isnumeric(S.Seed) && all(~isnan(S.Seed))
+    rng(S.Seed);
+end
+
+% Corrector repeatability limits (zero -> perfect, deterministic corrector).
+if isempty(S.Ce)
+    Ce_limits = zeros(size(S.C));
+else
+    Ce_limits = S.Ce;
+end
 %% SOLVE SYSTEM
 
 % * Input Verification Prints *
@@ -61,7 +74,7 @@ Re_limits = S.Re;
 % Perform Montecarlo simulation.
 for i = 1:S.N
     % Relative Error and Transform Paths are output
-    [S.Error(i,:), ~, ~, ~, ~, S.Tn_list, S.Tc_list] = solve_error_comp(S.R, draw_error(Re_limits, S.Nsig, S.input_distribution), S.C, S.Cv);
+    [S.Error(i,:), ~, ~, ~, ~, S.Tn_list, S.Tc_list] = solve_error_comp(S.R, draw_error(Re_limits, S.Nsig, S.input_distribution), S.C, S.Cv, draw_error(Ce_limits, S.Nsig, S.input_distribution));
 
     % Progress Bar
     % if (mod(i,S.N/100)==0)
@@ -85,7 +98,7 @@ S.T_uplusNsigma = CoordTform(S.uplusNsigma, "p");
 % Generate plot figures if specified.
 if S.Plot
     % Generate 6 plots of histograms representing 6DOF Error in global Csys
-    plot_histogram(S.Error, S.mu, S.Nsig * S.sigma, S.Name)
+    plot_histogram(S.Error, S.mu, S.Nsig * S.sigma, S.Name, S.Nsig)
     % Define Csys plot scale
     Coordscale = 1;
     % Define Csys plot title

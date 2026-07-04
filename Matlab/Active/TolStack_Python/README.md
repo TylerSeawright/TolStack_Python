@@ -1,110 +1,128 @@
 # TolStack — Python Edition
 
-A Python port of the MATLAB App Designer tool `TolStack.mlapp`. It runs a
-Monte-Carlo tolerance-stack (error-budget) simulation that propagates 6-DOF
-error through a chain of homogeneous transformation matrices (HTMs), reading
-its inputs from the **live, currently-selected range in Excel** — exactly like
-the original MATLAB app.
+A Monte-Carlo tolerance-stack (error-budget) tool that propagates 6-DOF error
+through a chain of homogeneous transformation matrices (HTMs). Excel is the
+front end: you lay out the stack in cells, highlight the range, and run — results
+and plots are written straight back into the sheet.
 
-## How it works
+Python port of the MATLAB App Designer tool `TolStack.mlapp`, hardened and
+extended for open-source use. See `MATH_VERIFICATION.md` for the numerical
+verification report.
 
-The GUI is a small Tkinter window with two buttons, mirroring the `.mlapp`:
+## What's new vs. the original
 
-- **Solve** — reads the highlighted Excel range, runs the Monte-Carlo
-  simulation, optionally shows plots, and writes `mu + N*sigma` back into the
-  six cells to the right of the `RESULT` tag.
-- **Check Path** — reads the range and plots the nominal coordinate-system path
-  (CS0, CS1, CS2, …) so you can visually confirm the vector chain.
+- **Exact rotation extraction** (`eps_z`) — no more small-angle drift.
+- **Hardened input validation** — blank/NaN cells, `N_SAMPLES<2`, `N_SIGMA<=0`
+  are reported instead of silently producing `NaN`.
+- **Vectorized Monte-Carlo** — ~100–250× faster (batched 4×4 ops).
+- **Input distributions** — Normal, Uniform, or Triangular (per the
+  `DISTRIBUTION` tag), plus optional correlation in the API.
+- **Reproducible runs** — optional `SEED`.
+- **Stochastic compensator** — a new `Ce` term gives the corrector its own
+  zero-mean repeatability error (imperfect adjustment), propagated with the same
+  coupling as the correction itself.
+- **Richer outputs** — `MU`, `SIGMA`, `RESULT` (μ+Nσ) and `WORST_CASE`
+  (|μ|+Nσ), plus Monte-Carlo standard error / 95% CI available in the API.
+- **Sensitivity / tornado** — variance contribution of each error source.
+- **Plots embedded in Excel** — histograms, coordinate path, and tornado are
+  inserted into the sheet and **replaced** on each re-run.
+- **Cross-platform file mode** — run headless from an `.xlsx` with no Excel
+  (used by the test suite / CI).
+- **Tests + CI + MIT license.**
 
-Just like the MATLAB version, you first open your workbook in Excel, highlight
-the block of cells containing the tagged inputs, then click a button.
+## Input tags
 
-## Input format (unchanged from the MATLAB app)
+Put each tag in a cell; its values are read from the cells immediately to the
+right. Highlight the block containing them, then Solve.
 
-Inside your highlighted selection, the parser looks for these tags. Each tag
-sits in a cell, and its values are read from the cells immediately to the right:
+| Tag | Values | Meaning |
+|-----|--------|---------|
+| `R` | 6 | Nominal vector `X Y Z Tx Ty Tz` (one row per segment) |
+| `Re` | 6 | Random error (± value at `N_SIGMA`), one row per `R` |
+| `C` | 6 | Compensator setpoint (nonzero = active DOF) |
+| `Cv` | 6 | Compensator lever vector (offset to the corrector) |
+| `Ce` | 6 | **Compensator error** — zero-mean corrector repeatability (± at `N_SIGMA`) |
+| `N_SAMPLES` | 1 | Monte-Carlo trials (≥2, default 1000) |
+| `N_SIGMA` | 1 | Sigma multiplier the tolerances are quoted at (default 3) |
+| `DISTRIBUTION` | 1 | `N` Normal, `U` Uniform, `T` Triangular |
+| `SEED` | 1 | Optional RNG seed. **Blank = a new random draw each run** (a Monte-Carlo should vary); a number = reproducible identical results |
+| `PLOT` | 1 | `1` embed plots in the sheet, `0` none |
+| `SHOW` | 1 | `1` also open interactive, rotatable plot windows (not captured by the embedded PNG) |
+| `NAME` | 1 | Stack name (plot titles) |
+| `RESULT` | — | Anchor; μ+Nσ written to its right |
+| `MU` / `SIGMA` / `WORST_CASE` | — | Optional anchors for mean, 1σ, and |μ|+Nσ |
 
-| Tag            | Values read | Meaning                                   |
-|----------------|-------------|-------------------------------------------|
-| `R`            | 6           | Nominal vector (X Y Z Tx Ty Tz); one row per segment |
-| `Re`           | 6           | Random error terms (N-sigma), one row per `R` |
-| `C`            | 6           | Compensator (optional)                    |
-| `Cv`           | 6           | Compensator vector (optional)             |
-| `N_SAMPLES`    | 1           | Monte-Carlo sample count (default 1000)   |
-| `N_SIGMA`      | 1           | Sigma multiplier (default 3)              |
-| `RESULT`       | —           | Anchor cell; results written to its right |
-| `PLOT`         | 1           | 1 = generate plots, 0 = none              |
-| `NAME`         | 1           | Stack name (text)                         |
-| `DISTRIBUTION` | 1           | Input distribution label (Normal)         |
+Angles are radians, positions in the sheet's units. `R` and `Re` are required.
 
-`R` and `Re` are required. Angles are in radians, positions in the sheet's units.
+## Excel-native buttons (the whole UI is Excel)
 
-## Install & run (Windows)
+`TolStack_Template.xlsx` has a ready-made example tab. To add the two on-sheet
+buttons once (no Developer tab needed):
+
+1. Open the template and **Save As → `TolStack_Template.xlsm`** (Excel
+   Macro-Enabled Workbook).
+2. **Alt+F11** → in the editor, `Insert → Module`, and paste the contents of
+   **`TolStack_Buttons.bas`** (edit `SCRIPT_DIR` if you move the project).
+   Close the editor.
+3. On the sheet, `Insert → Shapes` → draw a rounded rectangle, type "Solve".
+   Right-click it → **Assign Macro** → `TolStack_Solve`.
+4. Draw a second shape "Check Path", Assign Macro → `TolStack_CheckPath`.
+
+Now the workflow is entirely in Excel: highlight the input range and click
+**Solve** (writes results + embeds plots) or **Check Path** (embeds the nominal
+path plot). The buttons launch the Python backend, which attaches to the open
+workbook via COM. A fallback mini-window (`TolStack_Dev.bat` / desktop shortcut)
+runs the identical backend if you prefer, and adds an **Export Data** button
+that saves the raw Monte-Carlo histogram samples to `.csv` or `.xlsx`.
+
+Embedded plots are laid out left-to-right: the **coordinate path** first, the
+**error histogram** to its right, then the **sensitivity tornado**. Re-running
+Solve replaces them. The template's first tab is a full **Instructions** sheet.
+
+> Requires Windows + Excel for the live/button workflow (via `pywin32`). Make
+> sure the workbook is **not** in Protected View (click *Enable Editing*).
+
+## Install & run
 
 ```
 pip install -r requirements.txt
-python app.py
 ```
 
-- **Windows + Microsoft Excel is required** for the live-Excel reading and
-  write-back (via `pywin32` COM automation), matching the original
-  `actxGetRunningServer('Excel.Application')` behavior.
-- Open your workbook, highlight the input range, then click **Solve** or
-  **Check Path**.
+- Buttons / mini-window: highlight the range, click Solve.
+- Headless (any OS, no Excel — used by CI):
+  ```
+  python tolstack_cli.py solve --file TolStack_Template.xlsx --sheet Example
+  ```
 
-## File map (MATLAB → Python)
+## Tests
 
-| Python module   | Ported MATLAB source                                             |
-|-----------------|-----------------------------------------------------------------|
-| `transforms.py` | `Tform.m`, `CoordTform.m`, `extract_HTM_error.m`, `data_transform.m`, `COORD.m`, `comp.m` |
-| `excel_io.py`   | `ReadActiveExcel.m`, `write_results.m`                           |
-| `solver.py`     | `STACKRANGE.m`, `tag_parse.m`, `fetchstack.m`, `check_inputs.m`, `nrd.m`, `solve_error_comp.m`, `err_correct2.m`, `TolStackSolve.m` |
-| `plotting.py`   | `plot_histogram.m`, `plot_coord2.m`                             |
-| `app.py`        | `TolStack.mlapp` (the App Designer GUI + `TolStack_Button.m`)   |
+```
+python build_template.py      # generates the example workbook the IO test uses
+pytest -q
+```
+CI runs the suite on Python 3.10–3.12 (`.github/workflows/ci.yml`).
+
+## File map
+
+| Module | Role |
+|--------|------|
+| `transforms.py` | HTM math (scalar + batched); exact & log-map extraction |
+| `solver.py` | parsing, validation, distributions, vectorized MC, compensator, sensitivity |
+| `excel_io.py` | live Excel via COM (same-workbook read/write, plot embedding) |
+| `file_io.py` | openpyxl backend (headless / cross-platform / CI) |
+| `plotting.py` | histograms, coordinate path, tornado |
+| `tolstack_cli.py` | headless entry point the buttons call (`solve` / `checkpath`) |
+| `app.py` | optional Tkinter fallback window |
+| `TolStack_Buttons.bas` | VBA for the on-sheet buttons |
+| `tests/` | pytest suite |
 
 ## Notes on fidelity
 
-- Rotation order is preserved: 3-2-1 (`Rz*Ry*Rx*Translate` for `"o"`,
-  `Translate*Rz*Ry*Rx` for `"p"`).
-- `extract_HTM_error` recovers the ZYX angles **exactly** (`eps_z =
-  atan2(H[1,0], H[0,0])`). The original MATLAB used a small-angle approximation
-  for the Z rotation; the exact form is used here and the `.m` source should be
-  updated to match. `transforms.rotation_vector_error` offers an optional
-  order-independent (log-map) angular measure with no gimbal-lock singularity.
-- Sample standard deviation uses `ddof=1`, matching MATLAB's default `std`.
-- Compensation is applied when any corrector is present (`np.any(C != 0)`); an
-  all-zero compensator leaves the error unchanged.
-- **Input distribution** is honored via the `DISTRIBUTION` tag: `N`/`Normal`
-  samples `N(0, Re/N_SIGMA)`; `U`/`Uniform` samples uniformly across the full
-  `±Re` tolerance band. Unrecognized values fall back to Normal.
-- Inputs are validated: blank/non-numeric cells in `R/Re/C/Cv`, `N_SAMPLES < 2`,
-  or `N_SIGMA <= 0` are reported as errors instead of silently producing `NaN`.
-- See `MATH_VERIFICATION.md` for the full numerical-verification report.
-
-## Building a standalone .exe (no Python needed by end users)
-
-The repo includes a PyInstaller spec and a one-click build script. On a Windows
-machine that has Python installed:
-
-```
-cd TolStack_Python
-build.bat
-```
-
-This installs the dependencies (numpy, matplotlib, pywin32, pyinstaller) and
-produces a single windowed executable at:
-
-```
-TolStack_Python\dist\TolStack.exe
-```
-
-Copy `TolStack.exe` anywhere and double-click to launch — no Python install is
-required on the target machine. It still needs Microsoft Excel to be running
-with the workbook open and the input range highlighted, exactly like the
-script and the original MATLAB app.
-
-Notes:
-- The window/taskbar icon and exe icon come from `TolStack.ico` (generated from
-  `TolStackIcon2.png`).
-- `build.bat` uses `TolStack.spec`; edit the spec if you want a folder build
-  (`console=False`, `--onedir`) instead of the default single-file build.
+- Rotation order 3-2-1 (`Rz*Ry*Rx*Translate` for `"o"`).
+- `extract_HTM_error` recovers ZYX angles exactly; `rotation_vector_error`
+  offers an order-independent, gimbal-lock-free alternative.
+- Sample std uses `ddof=1` (matches MATLAB `std`).
+- **Normal** sampling is bit-identical to the original tool, so existing Normal
+  workbooks are unchanged.
+- The MATLAB sources under `Matlab/Active/` were updated in parallel to keep the
+  `.m` reference in sync (exact `eps_z`, gate, guards, distributions, `Ce`).

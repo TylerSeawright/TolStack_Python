@@ -24,5 +24,11 @@ function [output, idx] = tag_parse(data, tag, tag_length)
             end
         end
     end
-    output = val{1};
+    % Return empty when the tag is not present so optional tags (Ce, SEED,
+    % DISTRIBUTION, ...) don't crash. Mirrors the Python port returning None.
+    if isempty(val)
+        output = [];
+    else
+        output = val{1};
+    end
 end

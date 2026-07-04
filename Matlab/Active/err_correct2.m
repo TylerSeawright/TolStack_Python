@@ -1,6 +1,11 @@
-function Trec = err_correct2(Tre, Tae, Tn, C, Cv)
+function Trec = err_correct2(Tre, Tae, Tn, C, Cv, Ce)
     % Solve Corrector Difference Transform
-    % This represents coupled motion from applying compensation
+    % This represents coupled motion from applying compensation.
+    % Ce (optional) is a zero-mean corrector error sample (same size as C)
+    % modeling corrector repeatability; omit / pass zeros for a perfect corrector.
+    if nargin < 6 || isempty(Ce)
+        Ce = zeros(size(C));
+    end
     rowC = size(C,1);
     for j = 1:rowC % For all Corrector rows provided
         if all(C(j,:) == 0) % If no corrector provided, don't perform calc.
@@ -11,7 +16,7 @@ function Trec = err_correct2(Tre, Tae, Tn, C, Cv)
                 if C(j,i) == 0
                     CD(i) = 0;
                 else
-                    CD(i) = C(j,i) - Ere(i);
+                    CD(i) = C(j,i) - Ere(i) + Ce(j,i);
                 end
             end
             

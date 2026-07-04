@@ -32,5 +32,7 @@ function s = fetchstack(s)
     end
     s.Name = val{9,1};
     s.input_distribution = val{10,1};
-    
+    s.Ce = val{11,1};       % Compensator error (optional; empty -> perfect corrector)
+    s.Seed = val{12,1};     % Optional RNG seed (empty -> nondeterministic)
+
 end
